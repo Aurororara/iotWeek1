@@ -83,17 +83,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Periodic heartbeat timer
   let heartbeatTimer = null;
 
-  // Initialize Canvas Size
-  function resizeCanvas() {
-    const wrapper = gameCanvas.parentElement;
-    if (wrapper) {
-      gameCanvas.width = wrapper.clientWidth;
-      gameCanvas.height = wrapper.clientHeight;
-    }
-  }
-  window.addEventListener('resize', resizeCanvas);
-  resizeCanvas();
-
   // Populate Avatar Selector
   function renderAvatars() {
     avatarList.innerHTML = '';
@@ -194,7 +183,6 @@ document.addEventListener('DOMContentLoaded', () => {
     screenGame.classList.add('active');
     headerGameInfo.classList.remove('hidden');
     btnLeaveRoom.classList.remove('hidden');
-    resizeCanvas();
 
     mqttClient.connect(() => {
       mqttClient.joinRoom(roomId, localPlayer);
@@ -210,7 +198,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     heartbeatTimer = setInterval(() => {
       if (mqttClient.connected && gameState.roomId) {
-        // Broadcast local presence heartbeat
         mqttClient.publish('presence', {
           action: 'heartbeat',
           playerId: localPlayer.playerId,
@@ -220,14 +207,17 @@ document.addEventListener('DOMContentLoaded', () => {
           joinedAt: localPlayer.joinedAt
         });
 
-        // Prune ghosts
         gameState.pruneInactivePlayers();
       }
     }, 3000);
   }
 
   canvasManager.onStrokeEmit = (strokeData) => {
-    mqttClient.publish('stroke', strokeData);
+    if (strokeData.type === 'snapshot') {
+      mqttClient.publish('snapshot', strokeData);
+    } else {
+      mqttClient.publish('stroke', strokeData);
+    }
   };
 
   toolBtns.forEach(btn => {
@@ -445,7 +435,6 @@ document.addEventListener('DOMContentLoaded', () => {
       gameState.addOrUpdatePlayer(data);
       addChatMessage('系統', `${data.nickname} 加入了房間`, 'system');
 
-      // Respond with local presence announce so new player sees everyone
       mqttClient.publish('presence', {
         action: 'announce',
         playerId: localPlayer.playerId,
@@ -455,7 +444,6 @@ document.addEventListener('DOMContentLoaded', () => {
         joinedAt: localPlayer.joinedAt
       });
 
-      // If local player is Drawer & currently drawing, send canvas snapshot
       if (gameState.isLocalPlayerDrawer() && gameState.status === 'DRAWING') {
         mqttClient.publish('snapshot', {
           senderId: localPlayer.playerId,

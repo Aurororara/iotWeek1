@@ -1,5 +1,5 @@
 // ==========================================================================
-// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (PIXEL-PERFECT STROKE SYNC)
+// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (FIXED VIRTUAL RESOLUTION & SNAPSHOT AUTO-SYNC)
 // ==========================================================================
 
 export class CanvasManager {
@@ -7,6 +7,12 @@ export class CanvasManager {
     this.canvas = canvasElement;
     this.ctx = canvasElement.getContext('2d', { willReadFrequently: true });
     
+    // Internal fixed virtual resolution (Guarantees identical coordinates across all screens)
+    this.VIRTUAL_WIDTH = 800;
+    this.VIRTUAL_HEIGHT = 550;
+    this.canvas.width = this.VIRTUAL_WIDTH;
+    this.canvas.height = this.VIRTUAL_HEIGHT;
+
     this.isDrawing = false;
     this.enabled = false; // Only Drawer can draw
     this.currentTool = 'brush'; // brush, line, rect, circle, fill, eraser
@@ -17,10 +23,10 @@ export class CanvasManager {
     this.lastX = 0;
     this.lastY = 0;
 
-    // Buffer for streaming stroke points over MQTT (16ms throttle = ~60 FPS)
+    // Buffer for streaming stroke points over MQTT (45ms throttle ~22 msgs/sec max for EMQX stability)
     this.strokeBuffer = [];
     this.throttleTimer = null;
-    this.throttleIntervalMs = 16; 
+    this.throttleIntervalMs = 45; 
 
     // Shape start point
     this.shapeStartX = 0;
@@ -31,7 +37,7 @@ export class CanvasManager {
     this.historyStack = [];
     this.maxHistory = 15;
 
-    // Callback for broadcasting strokes over MQTT
+    // Callbacks for broadcasting over MQTT
     this.onStrokeEmit = null;
 
     this.initEvents();
@@ -42,8 +48,8 @@ export class CanvasManager {
       const rect = this.canvas.getBoundingClientRect();
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      const scaleX = this.canvas.width / rect.width;
-      const scaleY = this.canvas.height / rect.height;
+      const scaleX = this.VIRTUAL_WIDTH / rect.width;
+      const scaleY = this.VIRTUAL_HEIGHT / rect.height;
       return {
         x: (clientX - rect.left) * scaleX,
         y: (clientY - rect.top) * scaleY
@@ -66,6 +72,7 @@ export class CanvasManager {
       if (this.currentTool === 'fill') {
         this.floodFill(Math.round(x), Math.round(y), this.color);
         this.emitStroke({ type: 'fill', x: Math.round(x), y: Math.round(y), color: this.color });
+        this.emitSnapshot();
         this.isDrawing = false;
         return;
       }
@@ -131,6 +138,9 @@ export class CanvasManager {
         this.emitStroke({ type: 'end' });
       }
       this.snapshotBeforeShape = null;
+
+      // Auto-sync full snapshot on stroke end to guarantee 100% identical canvas for all viewers
+      this.emitSnapshot();
     };
 
     this.canvas.addEventListener('mousedown', startDraw);
@@ -197,7 +207,7 @@ export class CanvasManager {
     if (this.historyStack.length > 0) {
       const previousState = this.historyStack.pop();
       this.ctx.putImageData(previousState, 0, 0);
-      this.emitStroke({ type: 'snapshot', dataUrl: this.canvas.toDataURL() });
+      this.emitSnapshot();
     }
   }
 
@@ -207,6 +217,7 @@ export class CanvasManager {
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     if (broadcast && this.enabled) {
       this.emitStroke({ type: 'clear' });
+      this.emitSnapshot();
     }
   }
 
@@ -284,9 +295,6 @@ export class CanvasManager {
     this.ctx.putImageData(imgData, 0, 0);
   }
 
-  /**
-   * Handle incoming remote stroke events from MQTT
-   */
   handleRemoteStroke(data) {
     if (!data) return;
 
@@ -321,9 +329,7 @@ export class CanvasManager {
 
       case 'snapshot':
         if (data.dataUrl) {
-          const img = new Image();
-          img.onload = () => this.ctx.drawImage(img, 0, 0);
-          img.src = data.dataUrl;
+          this.loadSnapshot(data.dataUrl);
         }
         break;
     }
@@ -332,6 +338,12 @@ export class CanvasManager {
   emitStroke(strokeData) {
     if (this.onStrokeEmit) {
       this.onStrokeEmit(strokeData);
+    }
+  }
+
+  emitSnapshot() {
+    if (this.onStrokeEmit && this.enabled) {
+      this.onStrokeEmit({ type: 'snapshot', dataUrl: this.getSnapshot() });
     }
   }
 
