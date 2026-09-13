@@ -413,6 +413,7 @@ document.addEventListener('DOMContentLoaded', () => {
     gameState.currentDrawerId = drawer.id;
     gameState.resetTurnState();
 
+    // Clear local canvas for host
     canvasManager.clearCanvas(false);
 
     mqttClient.publish('state', {
@@ -490,6 +491,9 @@ document.addEventListener('DOMContentLoaded', () => {
       gameState.currentRound = data.round;
       displayRound.textContent = `${data.round} / ${data.maxRounds}`;
 
+      // CRITICAL FIX: Clear canvas for EVERYONE in the room when a new turn begins!
+      canvasManager.clearCanvas(false);
+
       const drawer = gameState.players.get(data.drawerId);
       const drawerName = drawer ? drawer.nickname : '玩家';
 
@@ -520,6 +524,9 @@ document.addEventListener('DOMContentLoaded', () => {
       gameState.timer = data.turnDuration;
       displayTimer.textContent = gameState.timer;
       canvasOverlay.classList.add('hidden');
+
+      // Ensure canvas is 100% fresh & white when drawing phase starts
+      canvasManager.clearCanvas(false);
 
       if (gameState.isLocalPlayerDrawer()) {
         wordDisplay.innerHTML = `<span>題目：${data.word}</span>`;
@@ -573,7 +580,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       gameState.onPlayersUpdate(Array.from(gameState.players.values()));
 
-      // Host checks if all guessers have answered correctly to end turn immediately
       checkTurnEndCondition();
     }
 
