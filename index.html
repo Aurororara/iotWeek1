@@ -237,17 +237,20 @@
           <!-- RIGHT SIDEBAR: Chat & Guessing Box -->
           <aside class="sidebar-right glass-panel">
             <div class="panel-header">
-              <h3><i class="fa-solid fa-comments"></i> 猜題聊天室</h3>
+              <h3>
+                <i class="fa-solid fa-comments"></i> 猜題聊天室 
+                <span class="badge guess-hint-badge" id="chat-header-badge">在此輸入答案👇</span>
+              </h3>
             </div>
             
             <div class="chat-messages" id="chat-messages">
               <div class="chat-msg system-msg">
-                <i class="fa-solid fa-circle-info"></i> 歡迎來到 MQTT 你畫我猜！在下方輸入框猜測畫家所畫的題目吧！
+                <i class="fa-solid fa-circle-info"></i> 歡迎來到 MQTT 你畫我猜！看著中間畫布，在右下方輸入框猜測答案！
               </div>
             </div>
 
             <form id="chat-form" class="chat-form">
-              <input type="text" id="chat-input" placeholder="輸入猜測答案..." maxlength="30" autocomplete="off">
+              <input type="text" id="chat-input" placeholder="🎯 在此輸入猜測答案 (Enter發送)..." maxlength="30" autocomplete="off">
               <button type="submit" id="btn-send-chat" class="btn btn-primary">
                 <i class="fa-solid fa-paper-plane"></i>
               </button>

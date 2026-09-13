@@ -1,5 +1,5 @@
 // ==========================================================================
-// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE
+// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (THROTTLED STROKE SYNC)
 // ==========================================================================
 
 export class CanvasManager {
@@ -16,7 +16,11 @@ export class CanvasManager {
     // Stroke tracking
     this.lastX = 0;
     this.lastY = 0;
-    this.pointsBuffer = [];
+    
+    // Throttling stroke point buffer (Reduces MQTT network congestion)
+    this.strokeBuffer = [];
+    this.throttleTimer = null;
+    this.throttleIntervalMs = 30; // 30ms batching (~33 updates/sec max)
 
     // Shape start point
     this.shapeStartX = 0;
@@ -34,7 +38,6 @@ export class CanvasManager {
   }
 
   initEvents() {
-    // Pointer / Mouse / Touch listeners
     const getPos = (e) => {
       const rect = this.canvas.getBoundingClientRect();
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -56,7 +59,7 @@ export class CanvasManager {
       this.lastY = y;
       this.shapeStartX = x;
       this.shapeStartY = y;
-      this.pointsBuffer = [{ x, y }];
+      this.strokeBuffer = [];
 
       // Save state before drawing
       this.saveState();
@@ -82,6 +85,9 @@ export class CanvasManager {
         width: this.lineWidth,
         tool: this.currentTool
       });
+
+      // Start buffer flush timer
+      this.startBufferTimer();
     };
 
     const moveDraw = (e) => {
@@ -90,21 +96,14 @@ export class CanvasManager {
       const { x, y } = getPos(e);
 
       if (['brush', 'eraser'].includes(this.currentTool)) {
-        this.pointsBuffer.push({ x, y });
         this.drawSegment(this.lastX, this.lastY, x, y, this.currentTool === 'eraser' ? '#ffffff' : this.color, this.lineWidth);
 
-        this.emitStroke({
-          type: 'draw',
-          points: [{ x: this.lastX, y: this.lastY }, { x, y }],
-          color: this.currentTool === 'eraser' ? '#ffffff' : this.color,
-          width: this.lineWidth,
-          tool: this.currentTool
-        });
+        // Queue stroke points into batch buffer
+        this.strokeBuffer.push({ x1: this.lastX, y1: this.lastY, x2: x, y2: y });
 
         this.lastX = x;
         this.lastY = y;
       } else if (['rect', 'circle', 'line'].includes(this.currentTool)) {
-        // Preview shape locally
         if (this.snapshotBeforeShape) {
           this.ctx.putImageData(this.snapshotBeforeShape, 0, 0);
         }
@@ -116,6 +115,10 @@ export class CanvasManager {
       if (!this.isDrawing || !this.enabled) return;
       this.isDrawing = false;
       const { x, y } = getPos(e) || { x: this.lastX, y: this.lastY };
+
+      // Flush remaining buffered stroke points
+      this.flushBuffer();
+      this.stopBufferTimer();
 
       if (['rect', 'circle', 'line'].includes(this.currentTool)) {
         this.emitStroke({
@@ -134,7 +137,7 @@ export class CanvasManager {
       this.snapshotBeforeShape = null;
     };
 
-    // Attach mouse & touch events
+    // Attach listeners
     this.canvas.addEventListener('mousedown', startDraw);
     this.canvas.addEventListener('mousemove', moveDraw);
     this.canvas.addEventListener('mouseup', endDraw);
@@ -143,6 +146,33 @@ export class CanvasManager {
     this.canvas.addEventListener('touchstart', startDraw, { passive: false });
     this.canvas.addEventListener('touchmove', moveDraw, { passive: false });
     this.canvas.addEventListener('touchend', endDraw);
+  }
+
+  startBufferTimer() {
+    this.stopBufferTimer();
+    this.throttleTimer = setInterval(() => {
+      this.flushBuffer();
+    }, this.throttleIntervalMs);
+  }
+
+  stopBufferTimer() {
+    if (this.throttleTimer) {
+      clearInterval(this.throttleTimer);
+      this.throttleTimer = null;
+    }
+  }
+
+  flushBuffer() {
+    if (this.strokeBuffer.length > 0) {
+      this.emitStroke({
+        type: 'draw',
+        points: [...this.strokeBuffer],
+        color: this.currentTool === 'eraser' ? '#ffffff' : this.color,
+        width: this.lineWidth,
+        tool: this.currentTool
+      });
+      this.strokeBuffer = [];
+    }
   }
 
   setTool(tool) {
@@ -185,9 +215,6 @@ export class CanvasManager {
     }
   }
 
-  /**
-   * Draw line segment
-   */
   drawSegment(x1, y1, x2, y2, color, width) {
     this.ctx.beginPath();
     this.ctx.strokeStyle = color;
@@ -199,9 +226,6 @@ export class CanvasManager {
     this.ctx.stroke();
   }
 
-  /**
-   * Draw Geometric Shapes
-   */
   drawShape(shape, x1, y1, x2, y2, color, width) {
     this.ctx.beginPath();
     this.ctx.strokeStyle = color;
@@ -221,16 +245,12 @@ export class CanvasManager {
     this.ctx.stroke();
   }
 
-  /**
-   * 4-Direction Flood Fill Bucket
-   */
   floodFill(startX, startY, fillColorHex) {
     const imgData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
     const data = imgData.data;
     const width = this.canvas.width;
     const height = this.canvas.height;
 
-    // Convert hex to RGBA
     const tempDiv = document.createElement('div');
     tempDiv.style.color = fillColorHex;
     document.body.appendChild(tempDiv);
@@ -269,9 +289,6 @@ export class CanvasManager {
     this.ctx.putImageData(imgData, 0, 0);
   }
 
-  /**
-   * Handle incoming remote stroke events from MQTT
-   */
   handleRemoteStroke(data) {
     if (!data) return;
 
@@ -283,7 +300,7 @@ export class CanvasManager {
       case 'draw':
         if (data.points && data.points.length > 0) {
           data.points.forEach(p => {
-            this.drawSegment(p.x1 || data.points[0].x, p.y1 || data.points[0].y, p.x2 || p.x, p.y2 || p.y, data.color, data.width);
+            this.drawSegment(p.x1, p.y1, p.x2, p.y2, data.color, data.width);
           });
         }
         break;

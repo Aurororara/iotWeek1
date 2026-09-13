@@ -57,6 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const chatMessages = document.getElementById('chat-messages');
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
+  const chatHeaderBadge = document.getElementById('chat-header-badge');
 
   // Modals
   const modalWordSelect = document.getElementById('modal-word-select');
@@ -179,9 +180,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  /**
-   * Enter Game Room logic
-   */
   function enterGameRoom(roomId, config) {
     gameState.roomId = roomId;
     gameState.setRoomConfig(config);
@@ -193,7 +191,6 @@ document.addEventListener('DOMContentLoaded', () => {
     btnLeaveRoom.classList.remove('hidden');
     resizeCanvas();
 
-    // Connect to MQTT
     mqttClient.connect(() => {
       mqttClient.joinRoom(roomId, localPlayer);
       gameState.addOrUpdatePlayer(localPlayer);
@@ -202,12 +199,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Setup Canvas Stroke broadcasting
   canvasManager.onStrokeEmit = (strokeData) => {
     mqttClient.publish('stroke', strokeData);
   };
 
-  // Wire Toolbar Buttons
   toolBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       audioManager.playClick();
@@ -257,13 +252,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!text) return;
     chatInput.value = '';
 
-    // Check if player is Drawer -> Cannot chat
     if (gameState.isLocalPlayerDrawer() && gameState.status === 'DRAWING') {
       addChatMessage('系統', '畫家作畫中不能在聊天室劇透喔！', 'system');
       return;
     }
 
-    // Check if Guess is Correct during DRAWING
     if (gameState.status === 'DRAWING' && !gameState.isLocalPlayerDrawer()) {
       const localP = gameState.players.get(localPlayer.playerId);
       if (localP && localP.guessedCorrect) {
@@ -272,16 +265,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (text.trim().toLowerCase() === gameState.currentWord.trim().toLowerCase()) {
-        // Correct Answer!
         audioManager.playCorrect();
         triggerConfetti();
 
-        // Calculate score
         const points = 100 + Math.round((gameState.timer / gameState.turnDuration) * 200);
         localP.score += points;
         localP.guessedCorrect = true;
 
-        // Broadcast correct guess
         mqttClient.publish('chat', {
           senderId: localPlayer.playerId,
           senderName: localPlayer.nickname,
@@ -301,7 +291,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // Normal Chat message
     mqttClient.publish('chat', {
       senderId: localPlayer.playerId,
       senderName: localPlayer.nickname,
@@ -310,7 +299,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Add Chat Message DOM
   function addChatMessage(sender, text, type = 'normal') {
     const msg = document.createElement('div');
     msg.className = `chat-msg ${type === 'system' ? 'system-msg' : type === 'correct' ? 'correct-msg' : ''}`;
@@ -329,7 +317,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return str.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[m]);
   }
 
-  // Confetti Particle Effect
   function triggerConfetti() {
     if (window.confetti) {
       window.confetti({
@@ -340,7 +327,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Player List UI Update
   gameState.onPlayersUpdate = (players) => {
     playerCount.textContent = players.length;
     playerListEl.innerHTML = '';
@@ -362,7 +348,6 @@ document.addEventListener('DOMContentLoaded', () => {
       playerListEl.appendChild(card);
     });
 
-    // Update Host controls visibility
     if (gameState.isLocalPlayerHost() && gameState.status === 'LOBBY') {
       hostControls.classList.remove('hidden');
     } else {
@@ -370,7 +355,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Host Starts Game Click
   btnStartGame.addEventListener('click', () => {
     if (gameState.players.size < 1) {
       alert('房間內至少要有一位玩家才能開始！');
@@ -380,18 +364,13 @@ document.addEventListener('DOMContentLoaded', () => {
     startNewGameCycle();
   });
 
-  /**
-   * HOST GAME CYCLE MANAGEMENT
-   */
   function startNewGameCycle() {
     gameState.status = 'GAME_SETUP';
     gameState.currentRound = 1;
     gameState.drawerIndex = 0;
 
-    // Reset scores
     gameState.players.forEach(p => p.score = 0);
 
-    // Sync room setup state over MQTT
     mqttClient.publish('state', {
       type: 'game_started',
       rounds: gameState.rounds,
@@ -417,7 +396,6 @@ document.addEventListener('DOMContentLoaded', () => {
     gameState.currentDrawerId = drawer.id;
     gameState.resetTurnState();
 
-    // Clear canvas
     canvasManager.clearCanvas(false);
 
     mqttClient.publish('state', {
@@ -430,15 +408,11 @@ document.addEventListener('DOMContentLoaded', () => {
     gameState.drawerIndex++;
   }
 
-  /**
-   * MQTT EVENT HANDLERS
-   */
   mqttClient.on('presence', (data) => {
     if (data.action === 'join') {
       gameState.addOrUpdatePlayer(data);
       addChatMessage('系統', `${data.nickname} 加入了房間`, 'system');
 
-      // If local player is Drawer, send snapshot to new joiner
       if (gameState.isLocalPlayerDrawer() && gameState.status === 'DRAWING') {
         mqttClient.publish('snapshot', {
           senderId: localPlayer.playerId,
@@ -487,10 +461,14 @@ document.addEventListener('DOMContentLoaded', () => {
       if (gameState.isLocalPlayerDrawer()) {
         playerRoleBadge.textContent = '🎨 你是畫家';
         wordDisplay.innerHTML = '<span class="hint-text">請在選題視窗選擇題目...</span>';
+        chatForm.classList.remove('pulse-highlight');
+        chatHeaderBadge.textContent = '畫家禁言';
         showWordSelectionModal();
       } else {
         playerRoleBadge.textContent = '🔍 猜題者';
         wordDisplay.innerHTML = `<span class="hint-text">等待 ${escapeHtml(drawerName)} 選擇題目中...</span>`;
+        chatForm.classList.add('pulse-highlight');
+        chatHeaderBadge.textContent = '在此輸入答案👇';
         modalWordSelect.classList.add('hidden');
       }
 
@@ -512,14 +490,21 @@ document.addEventListener('DOMContentLoaded', () => {
         wordDisplay.innerHTML = `<span>題目：${data.word}</span>`;
         drawingToolbar.classList.remove('disabled');
         canvasManager.setDrawingEnabled(true);
+        chatForm.classList.remove('pulse-highlight');
+        chatHeaderBadge.textContent = '作畫中';
       } else {
         const hint = gameState.generateHint(data.word, 0);
         wordDisplay.innerHTML = `<span class="hint-text">${hint}</span>`;
         drawingToolbar.classList.add('disabled');
         canvasManager.setDrawingEnabled(false);
+        
+        // Highlight & focus chat box for guesser
+        chatForm.classList.add('pulse-highlight');
+        chatHeaderBadge.textContent = '在此輸入答案👇';
+        addChatMessage('系統', '👉 請在右下方聊天框輸入您猜測的答案！', 'system');
+        chatInput.focus();
       }
 
-      // If host, start countdown loop
       if (gameState.isLocalPlayerHost()) {
         startHostTimer(data.turnDuration);
       }
@@ -562,6 +547,7 @@ document.addEventListener('DOMContentLoaded', () => {
       audioManager.playTick();
       canvasOverlay.classList.remove('hidden');
       canvasOverlay.innerHTML = `<h2>時間到！正確答案是：<span style="color:var(--accent-warning)">${gameState.currentWord}</span></h2><p>即將進入下一輪...</p>`;
+      chatForm.classList.remove('pulse-highlight');
 
       if (gameState.isLocalPlayerHost()) {
         setTimeout(() => {
@@ -573,13 +559,11 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (data.type === 'game_over') {
       gameState.status = 'GAME_OVER';
       if (gameState.timerInterval) clearInterval(gameState.timerInterval);
+      chatForm.classList.remove('pulse-highlight');
       showGameOverModal(data.rankings);
     }
   });
 
-  /**
-   * Word selection modal for Drawer
-   */
   function showWordSelectionModal() {
     modalWordSelect.classList.remove('hidden');
     wordOptionsContainer.innerHTML = '';
@@ -602,9 +586,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  /**
-   * Host Timer Countdown loop
-   */
   function startHostTimer(duration) {
     if (gameState.timerInterval) clearInterval(gameState.timerInterval);
     let time = duration;
@@ -639,9 +620,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  /**
-   * Game Over Podium Modal
-   */
   function showGameOverModal(rankings) {
     audioManager.playWinFanfare();
     triggerConfetti();
@@ -651,7 +629,7 @@ document.addEventListener('DOMContentLoaded', () => {
     finalScoresList.innerHTML = '';
 
     const top3 = rankings.slice(0, 3);
-    const podiumOrder = [top3[1], top3[0], top3[2]].filter(Boolean); // 2nd, 1st, 3rd
+    const podiumOrder = [top3[1], top3[0], top3[2]].filter(Boolean);
 
     podiumOrder.forEach((p) => {
       const rank = rankings.indexOf(p) + 1;

@@ -409,6 +409,7 @@ input[type="text"]:focus, select:focus {
   font-weight: 700;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
@@ -595,6 +596,21 @@ input[type="text"]:focus, select:focus {
   display: flex;
   flex-direction: column;
 }
+.guess-hint-badge {
+  font-size: 0.75rem;
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--accent-warning);
+  border: 1px solid var(--accent-warning);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  animation: pulse-glow 1.5s infinite alternate;
+}
+
+@keyframes pulse-glow {
+  from { opacity: 0.7; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1.04); }
+}
+
 .chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -634,10 +650,22 @@ input[type="text"]:focus, select:focus {
   border-top: 1px solid var(--glass-border);
   display: flex;
   gap: 8px;
+  transition: var(--transition-normal);
 }
 #chat-input {
   flex: 1;
   padding: 10px 14px;
+}
+
+.chat-form.pulse-highlight #chat-input {
+  border-color: var(--accent-warning);
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.6);
+  animation: pulse-border 1.5s infinite alternate;
+}
+
+@keyframes pulse-border {
+  from { box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); }
+  to { box-shadow: 0 0 20px rgba(245, 158, 11, 0.9); }
 }
 
 /* Modal Overlay */
