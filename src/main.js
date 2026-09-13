@@ -74,10 +74,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const localPlayer = {
     playerId: mqttClient.playerId,
     nickname: localStorage.getItem('mqtt_draw_nickname') || '畫畫大師',
-    avatar: selectedAvatar
+    avatar: selectedAvatar,
+    joinedAt: Date.now()
   };
   
   const gameState = new GameState(localPlayer);
+
+  // Periodic heartbeat timer
+  let heartbeatTimer = null;
 
   // Initialize Canvas Size
   function resizeCanvas() {
@@ -175,6 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
   btnLeaveRoom.addEventListener('click', () => {
     if (confirm('確定要離開房間嗎？')) {
       audioManager.playClick();
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       mqttClient.leaveRoom(localPlayer);
       location.reload();
     }
@@ -194,9 +199,31 @@ document.addEventListener('DOMContentLoaded', () => {
     mqttClient.connect(() => {
       mqttClient.joinRoom(roomId, localPlayer);
       gameState.addOrUpdatePlayer(localPlayer);
+      startHeartbeatLoop();
     }, (err) => {
       alert('MQTT 連線失敗，請檢查網路連線或稍後再試！');
     });
+  }
+
+  // Heartbeat loop every 3 seconds to keep all players in sync
+  function startHeartbeatLoop() {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(() => {
+      if (mqttClient.connected && gameState.roomId) {
+        // Broadcast local presence heartbeat
+        mqttClient.publish('presence', {
+          action: 'heartbeat',
+          playerId: localPlayer.playerId,
+          nickname: localPlayer.nickname,
+          avatar: localPlayer.avatar,
+          score: gameState.players.get(localPlayer.playerId)?.score || 0,
+          joinedAt: localPlayer.joinedAt
+        });
+
+        // Prune ghosts
+        gameState.pruneInactivePlayers();
+      }
+    }, 3000);
   }
 
   canvasManager.onStrokeEmit = (strokeData) => {
@@ -408,16 +435,36 @@ document.addEventListener('DOMContentLoaded', () => {
     gameState.drawerIndex++;
   }
 
+  /**
+   * PRESENCE HANDLER FOR REAL-TIME PLAYER SYNC
+   */
   mqttClient.on('presence', (data) => {
+    if (!data.playerId) return;
+
     if (data.action === 'join') {
       gameState.addOrUpdatePlayer(data);
       addChatMessage('系統', `${data.nickname} 加入了房間`, 'system');
 
+      // Respond with local presence announce so new player sees everyone
+      mqttClient.publish('presence', {
+        action: 'announce',
+        playerId: localPlayer.playerId,
+        nickname: localPlayer.nickname,
+        avatar: localPlayer.avatar,
+        score: gameState.players.get(localPlayer.playerId)?.score || 0,
+        joinedAt: localPlayer.joinedAt
+      });
+
+      // If local player is Drawer & currently drawing, send canvas snapshot
       if (gameState.isLocalPlayerDrawer() && gameState.status === 'DRAWING') {
         mqttClient.publish('snapshot', {
           senderId: localPlayer.playerId,
           dataUrl: canvasManager.getSnapshot()
         });
+      }
+    } else if (data.action === 'announce' || data.action === 'heartbeat') {
+      if (data.playerId !== localPlayer.playerId) {
+        gameState.addOrUpdatePlayer(data);
       }
     } else if (data.action === 'leave') {
       gameState.removePlayer(data.playerId);
@@ -498,7 +545,6 @@ document.addEventListener('DOMContentLoaded', () => {
         drawingToolbar.classList.add('disabled');
         canvasManager.setDrawingEnabled(false);
         
-        // Highlight & focus chat box for guesser
         chatForm.classList.add('pulse-highlight');
         chatHeaderBadge.textContent = '在此輸入答案👇';
         addChatMessage('系統', '👉 請在右下方聊天框輸入您猜測的答案！', 'system');

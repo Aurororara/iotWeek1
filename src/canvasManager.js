@@ -1,5 +1,5 @@
 // ==========================================================================
-// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (THROTTLED STROKE SYNC)
+// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (HIGH-PERFORMANCE STROKE SYNC)
 // ==========================================================================
 
 export class CanvasManager {
@@ -17,10 +17,10 @@ export class CanvasManager {
     this.lastX = 0;
     this.lastY = 0;
     
-    // Throttling stroke point buffer (Reduces MQTT network congestion)
+    // Throttling stroke point buffer (16ms = ~60 FPS for ultra smooth sync)
     this.strokeBuffer = [];
     this.throttleTimer = null;
-    this.throttleIntervalMs = 30; // 30ms batching (~33 updates/sec max)
+    this.throttleIntervalMs = 16; 
 
     // Shape start point
     this.shapeStartX = 0;
@@ -61,7 +61,6 @@ export class CanvasManager {
       this.shapeStartY = y;
       this.strokeBuffer = [];
 
-      // Save state before drawing
       this.saveState();
 
       if (this.currentTool === 'fill') {
@@ -86,7 +85,6 @@ export class CanvasManager {
         tool: this.currentTool
       });
 
-      // Start buffer flush timer
       this.startBufferTimer();
     };
 
@@ -98,7 +96,6 @@ export class CanvasManager {
       if (['brush', 'eraser'].includes(this.currentTool)) {
         this.drawSegment(this.lastX, this.lastY, x, y, this.currentTool === 'eraser' ? '#ffffff' : this.color, this.lineWidth);
 
-        // Queue stroke points into batch buffer
         this.strokeBuffer.push({ x1: this.lastX, y1: this.lastY, x2: x, y2: y });
 
         this.lastX = x;
@@ -116,7 +113,6 @@ export class CanvasManager {
       this.isDrawing = false;
       const { x, y } = getPos(e) || { x: this.lastX, y: this.lastY };
 
-      // Flush remaining buffered stroke points
       this.flushBuffer();
       this.stopBufferTimer();
 
@@ -137,7 +133,6 @@ export class CanvasManager {
       this.snapshotBeforeShape = null;
     };
 
-    // Attach listeners
     this.canvas.addEventListener('mousedown', startDraw);
     this.canvas.addEventListener('mousemove', moveDraw);
     this.canvas.addEventListener('mouseup', endDraw);
@@ -300,7 +295,11 @@ export class CanvasManager {
       case 'draw':
         if (data.points && data.points.length > 0) {
           data.points.forEach(p => {
-            this.drawSegment(p.x1, p.y1, p.x2, p.y2, data.color, data.width);
+            const x1 = p.x1 !== undefined ? p.x1 : (p.x !== undefined ? p.x : 0);
+            const y1 = p.y1 !== undefined ? p.y1 : (p.y !== undefined ? p.y : 0);
+            const x2 = p.x2 !== undefined ? p.x2 : x1;
+            const y2 = p.y2 !== undefined ? p.y2 : y1;
+            this.drawSegment(x1, y1, x2, y2, data.color, data.width);
           });
         }
         break;

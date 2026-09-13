@@ -5,7 +5,7 @@
 export class GameState {
   constructor(localPlayer) {
     this.localPlayer = localPlayer; // { playerId, nickname, avatar }
-    this.players = new Map(); // playerId -> { id, nickname, avatar, score, isHost, joinedAt, guessedCorrect }
+    this.players = new Map(); // playerId -> { id, nickname, avatar, score, isHost, joinedAt, lastSeen, guessedCorrect }
     
     // Room Config
     this.roomId = null;
@@ -27,8 +27,6 @@ export class GameState {
     this.onStateChange = null;
     this.onPlayersUpdate = null;
     this.onTimerTick = null;
-    this.onWordSelectRequired = null;
-    this.onGameOver = null;
   }
 
   setRoomConfig(config) {
@@ -42,13 +40,16 @@ export class GameState {
    */
   addOrUpdatePlayer(playerData) {
     const existing = this.players.get(playerData.playerId) || {};
+    const now = Date.now();
+    
     this.players.set(playerData.playerId, {
       id: playerData.playerId,
       nickname: playerData.nickname || existing.nickname || '匿名玩家',
       avatar: playerData.avatar || existing.avatar || '🦊',
       score: playerData.score !== undefined ? playerData.score : (existing.score || 0),
       isHost: playerData.isHost !== undefined ? playerData.isHost : (existing.isHost || false),
-      joinedAt: playerData.joinedAt || existing.joinedAt || Date.now(),
+      joinedAt: playerData.joinedAt || existing.joinedAt || now,
+      lastSeen: now,
       guessedCorrect: playerData.guessedCorrect !== undefined ? playerData.guessedCorrect : (existing.guessedCorrect || false)
     });
 
@@ -60,6 +61,24 @@ export class GameState {
     this.players.delete(playerId);
     this.checkHostElection();
     if (this.onPlayersUpdate) this.onPlayersUpdate(Array.from(this.players.values()));
+  }
+
+  /**
+   * Clean up inactive players who haven't sent a heartbeat for > 15s
+   */
+  pruneInactivePlayers() {
+    const now = Date.now();
+    let changed = false;
+    this.players.forEach((p, id) => {
+      if (id !== this.localPlayer.playerId && (now - p.lastSeen > 15000)) {
+        this.players.delete(id);
+        changed = true;
+      }
+    });
+    if (changed) {
+      this.checkHostElection();
+      if (this.onPlayersUpdate) this.onPlayersUpdate(Array.from(this.players.values()));
+    }
   }
 
   /**
@@ -96,20 +115,14 @@ export class GameState {
     const chars = Array.from(word);
     
     if (progress < 0.3) {
-      // Phase 1: All masked (_ _ _)
       return chars.map(() => '_').join(' ');
     } else if (progress < 0.7) {
-      // Phase 2: Show character count & space structure
       return chars.map(c => (c === ' ' ? ' ' : '_')).join(' ') + ` (${chars.length}個字)`;
     } else {
-      // Phase 3: Reveal first character
       return chars.map((c, i) => (i === 0 ? c : '_')).join(' ') + ` (${chars.length}個字)`;
     }
   }
 
-  /**
-   * Reset round state for new turn
-   */
   resetTurnState() {
     this.players.forEach(p => p.guessedCorrect = false);
     if (this.onPlayersUpdate) this.onPlayersUpdate(Array.from(this.players.values()));
