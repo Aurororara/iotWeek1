@@ -572,6 +572,9 @@ document.addEventListener('DOMContentLoaded', () => {
         drawer.score += data.drawerPoints;
       }
       gameState.onPlayersUpdate(Array.from(gameState.players.values()));
+
+      // Host checks if all guessers have answered correctly to end turn immediately
+      checkTurnEndCondition();
     }
 
     else if (data.type === 'turn_end') {
@@ -580,7 +583,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
       audioManager.playTick();
       canvasOverlay.classList.remove('hidden');
-      canvasOverlay.innerHTML = `<h2>時間到！正確答案是：<span style="color:var(--accent-warning)">${gameState.currentWord}</span></h2><p>即將進入下一輪...</p>`;
+      
+      const reasonText = data.reason === 'all_guessed' ? '🎉 全員猜中答案！提前進入下一題！' : '';
+      canvasOverlay.innerHTML = `<h2>${reasonText || '時間到！'} 正確答案是：<span style="color:var(--accent-warning)">${gameState.currentWord}</span></h2><p>即將進入下一輪...</p>`;
       chatForm.classList.remove('pulse-highlight');
 
       if (gameState.isLocalPlayerHost()) {
@@ -630,7 +635,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (time <= 0) {
         clearInterval(gameState.timerInterval);
-        mqttClient.publish('state', { type: 'turn_end' });
+        mqttClient.publish('state', { type: 'turn_end', reason: 'timeout' });
       }
     }, 1000);
   }
@@ -642,7 +647,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (allGuessed) {
       if (gameState.timerInterval) clearInterval(gameState.timerInterval);
-      mqttClient.publish('state', { type: 'turn_end' });
+      addChatMessage('系統', '🎉 所有猜題者皆已猜中答案！提前結束本輪！', 'system');
+      mqttClient.publish('state', { type: 'turn_end', reason: 'all_guessed' });
     }
   }
 

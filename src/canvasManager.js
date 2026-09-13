@@ -1,5 +1,5 @@
 // ==========================================================================
-// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (FIXED VIRTUAL RESOLUTION & SNAPSHOT AUTO-SYNC)
+// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (COMPRESSED SNAPSHOT SYNC)
 // ==========================================================================
 
 export class CanvasManager {
@@ -23,10 +23,10 @@ export class CanvasManager {
     this.lastX = 0;
     this.lastY = 0;
 
-    // Buffer for streaming stroke points over MQTT (45ms throttle ~22 msgs/sec max for EMQX stability)
+    // Buffer for streaming stroke points over MQTT (30ms throttle)
     this.strokeBuffer = [];
     this.throttleTimer = null;
-    this.throttleIntervalMs = 45; 
+    this.throttleIntervalMs = 30; 
 
     // Shape start point
     this.shapeStartX = 0;
@@ -80,7 +80,6 @@ export class CanvasManager {
       if (['rect', 'circle', 'line'].includes(this.currentTool)) {
         this.snapshotBeforeShape = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
       } else {
-        // Single point click dot draw
         this.drawSegment(x, y, x, y, this.currentTool === 'eraser' ? '#ffffff' : this.color, this.lineWidth);
         this.strokeBuffer.push({ x1: x, y1: y, x2: x, y2: y });
       }
@@ -139,7 +138,7 @@ export class CanvasManager {
       }
       this.snapshotBeforeShape = null;
 
-      // Auto-sync full snapshot on stroke end to guarantee 100% identical canvas for all viewers
+      // Send compressed snapshot on stroke end to ensure 100% pixel sync
       this.emitSnapshot();
     };
 
@@ -343,18 +342,22 @@ export class CanvasManager {
 
   emitSnapshot() {
     if (this.onStrokeEmit && this.enabled) {
-      this.onStrokeEmit({ type: 'snapshot', dataUrl: this.getSnapshot() });
+      // Compress snapshot to JPEG 0.5 (~15-20KB) so MQTT message payload never gets dropped
+      this.onStrokeEmit({ type: 'snapshot', dataUrl: this.canvas.toDataURL('image/jpeg', 0.5) });
     }
   }
 
   getSnapshot() {
-    return this.canvas.toDataURL();
+    return this.canvas.toDataURL('image/jpeg', 0.5);
   }
 
   loadSnapshot(dataUrl) {
     const img = new Image();
     img.onload = () => {
-      this.ctx.drawImage(img, 0, 0);
+      // Clear canvas before applying snapshot to prevent overlay stacking
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+      this.ctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
     };
     img.src = dataUrl;
   }
