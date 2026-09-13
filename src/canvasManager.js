@@ -1,5 +1,5 @@
 // ==========================================================================
-// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (SMOOTH CONTINUOUS PATH SYNC)
+// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (PIXEL-PERFECT STROKE SYNC)
 // ==========================================================================
 
 export class CanvasManager {
@@ -16,10 +16,6 @@ export class CanvasManager {
     // Local stroke tracking
     this.lastX = 0;
     this.lastY = 0;
-    
-    // Remote stroke continuous path tracking
-    this.remoteLastX = null;
-    this.remoteLastY = null;
 
     // Buffer for streaming stroke points over MQTT (16ms throttle = ~60 FPS)
     this.strokeBuffer = [];
@@ -77,13 +73,9 @@ export class CanvasManager {
       if (['rect', 'circle', 'line'].includes(this.currentTool)) {
         this.snapshotBeforeShape = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
       } else {
-        // Start brush/eraser stroke
-        this.ctx.beginPath();
-        this.ctx.strokeStyle = this.currentTool === 'eraser' ? '#ffffff' : this.color;
-        this.ctx.lineWidth = this.lineWidth;
-        this.ctx.lineCap = 'round';
-        this.ctx.lineJoin = 'round';
-        this.ctx.moveTo(x, y);
+        // Single point click dot draw
+        this.drawSegment(x, y, x, y, this.currentTool === 'eraser' ? '#ffffff' : this.color, this.lineWidth);
+        this.strokeBuffer.push({ x1: x, y1: y, x2: x, y2: y });
       }
 
       this.emitStroke({
@@ -103,21 +95,8 @@ export class CanvasManager {
       const { x, y } = getPos(e);
 
       if (['brush', 'eraser'].includes(this.currentTool)) {
-        // Smooth local drawing using quadratic bezier curve
-        const midX = (this.lastX + x) / 2;
-        const midY = (this.lastY + y) / 2;
-
-        this.ctx.strokeStyle = this.currentTool === 'eraser' ? '#ffffff' : this.color;
-        this.ctx.lineWidth = this.lineWidth;
-        this.ctx.lineCap = 'round';
-        this.ctx.lineJoin = 'round';
-        this.ctx.quadraticCurveTo(this.lastX, this.lastY, midX, midY);
-        this.ctx.stroke();
-        this.ctx.beginPath();
-        this.ctx.moveTo(midX, midY);
-
-        // Record point for remote sync
-        this.strokeBuffer.push({ x, y });
+        this.drawSegment(this.lastX, this.lastY, x, y, this.currentTool === 'eraser' ? '#ffffff' : this.color, this.lineWidth);
+        this.strokeBuffer.push({ x1: this.lastX, y1: this.lastY, x2: x, y2: y });
 
         this.lastX = x;
         this.lastY = y;
@@ -132,18 +111,12 @@ export class CanvasManager {
     const endDraw = (e) => {
       if (!this.isDrawing || !this.enabled) return;
       this.isDrawing = false;
-      const { x, y } = getPos(e) || { x: this.lastX, y: this.lastY };
-
-      if (['brush', 'eraser'].includes(this.currentTool)) {
-        this.ctx.lineTo(x, y);
-        this.ctx.stroke();
-        this.ctx.beginPath();
-      }
 
       this.flushBuffer();
       this.stopBufferTimer();
 
       if (['rect', 'circle', 'line'].includes(this.currentTool)) {
+        const { x, y } = getPos(e) || { x: this.lastX, y: this.lastY };
         this.emitStroke({
           type: 'shape',
           tool: this.currentTool,
@@ -232,11 +205,20 @@ export class CanvasManager {
     this.saveState();
     this.ctx.fillStyle = '#ffffff';
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    this.remoteLastX = null;
-    this.remoteLastY = null;
     if (broadcast && this.enabled) {
       this.emitStroke({ type: 'clear' });
     }
+  }
+
+  drawSegment(x1, y1, x2, y2, color, width) {
+    this.ctx.beginPath();
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = width;
+    this.ctx.lineCap = 'round';
+    this.ctx.lineJoin = 'round';
+    this.ctx.moveTo(x1, y1);
+    this.ctx.lineTo(x2, y2);
+    this.ctx.stroke();
   }
 
   drawShape(shape, x1, y1, x2, y2, color, width) {
@@ -303,60 +285,30 @@ export class CanvasManager {
   }
 
   /**
-   * Handle incoming remote stroke events from MQTT (Continuous Path Bezier Curve)
+   * Handle incoming remote stroke events from MQTT
    */
   handleRemoteStroke(data) {
     if (!data) return;
 
     switch (data.type) {
-      case 'start':
-        this.remoteLastX = data.x;
-        this.remoteLastY = data.y;
-        break;
-
       case 'draw':
         if (data.points && data.points.length > 0) {
-          this.ctx.beginPath();
-          this.ctx.strokeStyle = data.color || '#000000';
-          this.ctx.lineWidth = data.width || 6;
-          this.ctx.lineCap = 'round';
-          this.ctx.lineJoin = 'round';
-
-          let prevX = this.remoteLastX !== null ? this.remoteLastX : data.points[0].x;
-          let prevY = this.remoteLastY !== null ? this.remoteLastY : data.points[0].y;
-
-          this.ctx.moveTo(prevX, prevY);
+          const color = data.color || '#000000';
+          const width = data.width || 6;
 
           data.points.forEach(p => {
-            const curX = p.x !== undefined ? p.x : p.x2;
-            const curY = p.y !== undefined ? p.y : p.y2;
+            const x1 = p.x1 !== undefined ? p.x1 : (p.x !== undefined ? p.x : 0);
+            const y1 = p.y1 !== undefined ? p.y1 : (p.y !== undefined ? p.y : 0);
+            const x2 = p.x2 !== undefined ? p.x2 : x1;
+            const y2 = p.y2 !== undefined ? p.y2 : y1;
 
-            if (curX !== undefined && curY !== undefined) {
-              const midX = (prevX + curX) / 2;
-              const midY = (prevY + curY) / 2;
-              this.ctx.quadraticCurveTo(prevX, prevY, midX, midY);
-              prevX = curX;
-              prevY = curY;
-            }
+            this.drawSegment(x1, y1, x2, y2, color, width);
           });
-
-          this.ctx.lineTo(prevX, prevY);
-          this.ctx.stroke();
-
-          this.remoteLastX = prevX;
-          this.remoteLastY = prevY;
         }
-        break;
-
-      case 'end':
-        this.remoteLastX = null;
-        this.remoteLastY = null;
         break;
 
       case 'shape':
         this.drawShape(data.tool, data.x1, data.y1, data.x2, data.y2, data.color, data.width);
-        this.remoteLastX = null;
-        this.remoteLastY = null;
         break;
 
       case 'fill':
