@@ -1,5 +1,5 @@
 // ==========================================================================
-// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (COMPRESSED SNAPSHOT SYNC)
+// MQTT DRAW & GUESS - 2D CANVAS DRAWING ENGINE (SYNCHRONOUS REAL-TIME SYNC)
 // ==========================================================================
 
 export class CanvasManager {
@@ -7,7 +7,7 @@ export class CanvasManager {
     this.canvas = canvasElement;
     this.ctx = canvasElement.getContext('2d', { willReadFrequently: true });
     
-    // Internal fixed virtual resolution (Guarantees identical coordinates across all screens)
+    // Internal fixed virtual resolution
     this.VIRTUAL_WIDTH = 800;
     this.VIRTUAL_HEIGHT = 550;
     this.canvas.width = this.VIRTUAL_WIDTH;
@@ -23,10 +23,10 @@ export class CanvasManager {
     this.lastX = 0;
     this.lastY = 0;
 
-    // Buffer for streaming stroke points over MQTT (30ms throttle)
+    // Buffer for streaming stroke points over MQTT (25ms throttle)
     this.strokeBuffer = [];
     this.throttleTimer = null;
-    this.throttleIntervalMs = 30; 
+    this.throttleIntervalMs = 25; 
 
     // Shape start point
     this.shapeStartX = 0;
@@ -72,7 +72,6 @@ export class CanvasManager {
       if (this.currentTool === 'fill') {
         this.floodFill(Math.round(x), Math.round(y), this.color);
         this.emitStroke({ type: 'fill', x: Math.round(x), y: Math.round(y), color: this.color });
-        this.emitSnapshot();
         this.isDrawing = false;
         return;
       }
@@ -80,6 +79,7 @@ export class CanvasManager {
       if (['rect', 'circle', 'line'].includes(this.currentTool)) {
         this.snapshotBeforeShape = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
       } else {
+        // Dot stroke
         this.drawSegment(x, y, x, y, this.currentTool === 'eraser' ? '#ffffff' : this.color, this.lineWidth);
         this.strokeBuffer.push({ x1: x, y1: y, x2: x, y2: y });
       }
@@ -137,9 +137,6 @@ export class CanvasManager {
         this.emitStroke({ type: 'end' });
       }
       this.snapshotBeforeShape = null;
-
-      // Send compressed snapshot on stroke end to ensure 100% pixel sync
-      this.emitSnapshot();
     };
 
     this.canvas.addEventListener('mousedown', startDraw);
@@ -216,7 +213,6 @@ export class CanvasManager {
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     if (broadcast && this.enabled) {
       this.emitStroke({ type: 'clear' });
-      this.emitSnapshot();
     }
   }
 
@@ -342,7 +338,6 @@ export class CanvasManager {
 
   emitSnapshot() {
     if (this.onStrokeEmit && this.enabled) {
-      // Compress snapshot to JPEG 0.5 (~15-20KB) so MQTT message payload never gets dropped
       this.onStrokeEmit({ type: 'snapshot', dataUrl: this.canvas.toDataURL('image/jpeg', 0.5) });
     }
   }
@@ -354,7 +349,6 @@ export class CanvasManager {
   loadSnapshot(dataUrl) {
     const img = new Image();
     img.onload = () => {
-      // Clear canvas before applying snapshot to prevent overlay stacking
       this.ctx.fillStyle = '#ffffff';
       this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
       this.ctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
