@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MQTT 你畫我猜 - 多人即時連線畫畫猜題遊戲</title>
+  <meta name="description" content="使用 MQTT WebSocket 即時同步畫布與聊天室，輕鬆與好友跨裝置連線玩你畫我猜！">
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+  
+  <!-- FontAwesome for icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- MQTT.js and Canvas Confetti via CDN -->
+  <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
+  
+  <!-- Style -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app" class="glass-container">
+    <!-- Header Bar -->
+    <header class="app-header">
+      <div class="logo">
+        <i class="fa-solid fa-palette logo-icon"></i>
+        <h1>MQTT <span>你畫我猜</span></h1>
+        <span class="badge mqtt-badge"><i class="fa-solid fa-bolt"></i> EMQX Live</span>
+      </div>
+
+      <div id="header-game-info" class="header-info hidden">
+        <div class="info-pill room-pill">
+          <i class="fa-solid fa-door-open"></i>
+          <span>房號: <strong id="display-room-code">----</strong></span>
+          <button id="btn-copy-room" class="btn-icon" title="複製邀請碼"><i class="fa-regular fa-copy"></i></button>
+        </div>
+        <div class="info-pill round-pill">
+          <i class="fa-solid fa-rotate"></i>
+          <span>回合: <strong id="display-round">1 / 5</strong></span>
+        </div>
+        <div class="info-pill timer-pill" id="timer-box">
+          <i class="fa-regular fa-clock"></i>
+          <span id="display-timer">60</span>s
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button id="btn-sound-toggle" class="btn-circle" title="音效開關">
+          <i class="fa-solid fa-volume-high"></i>
+        </button>
+        <button id="btn-leave-room" class="btn-circle btn-danger hidden" title="離開房間">
+          <i class="fa-solid fa-right-from-bracket"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      
+      <!-- SCREEN 1: LOBBY / LOGIN -->
+      <section id="screen-lobby" class="screen active">
+        <div class="lobby-card glass-panel">
+          <div class="lobby-header">
+            <h2><i class="fa-solid fa-gamepad"></i> 進入畫畫大廳</h2>
+            <p>設定你的稱號與大頭貼，建立或加入連線房間！</p>
+          </div>
+
+          <div class="lobby-form">
+            <!-- Avatar Selection -->
+            <div class="form-group">
+              <label>選擇頭像</label>
+              <div class="avatar-selector" id="avatar-list">
+                <!-- Dynamically populated via JS -->
+              </div>
+            </div>
+
+            <!-- Nickname -->
+            <div class="form-group">
+              <label for="input-nickname">玩家暱稱</label>
+              <div class="input-wrapper">
+                <i class="fa-solid fa-user input-icon"></i>
+                <input type="text" id="input-nickname" placeholder="輸入你的大名..." maxlength="12" value="">
+              </div>
+            </div>
+
+            <!-- Room Action Tabs -->
+            <div class="room-action-container">
+              <div class="tab-buttons">
+                <button class="tab-btn active" data-tab="create">建立新房間</button>
+                <button class="tab-btn" data-tab="join">加入已有房間</button>
+              </div>
+
+              <!-- Create Room Form -->
+              <div id="tab-create" class="tab-content active">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="select-rounds">遊戲回合數</label>
+                    <select id="select-rounds">
+                      <option value="3">3 回合 (快速)</option>
+                      <option value="5" selected>5 回合 (標準)</option>
+                      <option value="8">8 回合 (歡樂派對)</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label for="select-time">每回合作畫時間</label>
+                    <select id="select-time">
+                      <option value="45">45 秒</option>
+                      <option value="60" selected>60 秒</option>
+                      <option value="90">90 秒</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label for="select-category">題目詞庫分類</label>
+                  <select id="select-category">
+                    <option value="all" selected>🎲 綜合大亂鬥 (全分類)</option>
+                    <option value="food">🍱 台灣美食與飲料</option>
+                    <option value="anime">🎮 動漫與遊戲角色</option>
+                    <option value="animals">🐾 萌寵與野生動物</option>
+                    <option value="life">🏠 日常生活用品</option>
+                  </select>
+                </div>
+
+                <button id="btn-create-room" class="btn btn-primary btn-block btn-lg">
+                  <i class="fa-solid fa-plus-circle"></i> 建立房間並進入大廳
+                </button>
+              </div>
+
+              <!-- Join Room Form -->
+              <div id="tab-join" class="tab-content">
+                <div class="form-group">
+                  <label for="input-room-code">輸入房間代碼</label>
+                  <div class="input-wrapper">
+                    <i class="fa-solid fa-key input-icon"></i>
+                    <input type="text" id="input-room-code" placeholder="例如: DRAW-8888" maxlength="12" style="text-transform:uppercase;">
+                  </div>
+                </div>
+
+                <button id="btn-join-room" class="btn btn-success btn-block btn-lg">
+                  <i class="fa-solid fa-right-to-bracket"></i> 立即加入房間
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SCREEN 2: GAME ROOM -->
+      <section id="screen-game" class="screen">
+        
+        <!-- Topic / Word Banner (Header of Game area) -->
+        <div class="word-banner glass-panel" id="word-banner">
+          <div class="word-status-wrapper">
+            <span class="role-badge" id="player-role-badge">猜題者</span>
+            <div id="word-display" class="word-display">
+              <span class="hint-text">等待遊戲開始...</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="game-layout">
+          
+          <!-- LEFT SIDEBAR: Players & Leaderboard -->
+          <aside class="sidebar-left glass-panel">
+            <div class="panel-header">
+              <h3><i class="fa-solid fa-users"></i> 房間玩家 (<span id="player-count">0</span>)</h3>
+            </div>
+            <div class="player-list" id="player-list">
+              <!-- Dynamically rendered -->
+            </div>
+            
+            <div class="host-controls hidden" id="host-controls">
+              <button id="btn-start-game" class="btn btn-primary btn-block">
+                <i class="fa-solid fa-play"></i> 開始遊戲
+              </button>
+            </div>
+          </aside>
+
+          <!-- CENTER: Canvas & Drawing Toolbar -->
+          <div class="canvas-area glass-panel">
+            
+            <!-- Canvas Container -->
+            <div class="canvas-wrapper">
+              <canvas id="game-canvas" width="800" height="550"></canvas>
+              
+              <!-- Overlay for Selection / Turn Announcements -->
+              <div id="canvas-overlay" class="canvas-overlay">
+                <!-- Content injected dynamically -->
+              </div>
+            </div>
+
+            <!-- Drawing Toolbar (Only enabled for current Drawer) -->
+            <div class="drawing-toolbar disabled" id="drawing-toolbar">
+              <!-- Tool Selectors -->
+              <div class="tool-group">
+                <button class="tool-btn active" data-tool="brush" title="畫筆"><i class="fa-solid fa-paintbrush"></i></button>
+                <button class="tool-btn" data-tool="line" title="直線"><i class="fa-solid fa-slash"></i></button>
+                <button class="tool-btn" data-tool="rect" title="矩形"><i class="fa-regular fa-square"></i></button>
+                <button class="tool-btn" data-tool="circle" title="圓形"><i class="fa-regular fa-circle"></i></button>
+                <button class="tool-btn" data-tool="fill" title="倒油漆"><i class="fa-solid fa-fill-drip"></i></button>
+                <button class="tool-btn" data-tool="eraser" title="橡皮擦"><i class="fa-solid fa-eraser"></i></button>
+              </div>
+
+              <!-- Size Slider -->
+              <div class="tool-group size-group">
+                <div class="size-preview" id="size-preview"></div>
+                <input type="range" id="brush-size" min="2" max="40" value="6" title="筆劃大小">
+              </div>
+
+              <!-- Color Swatches -->
+              <div class="tool-group color-swatches" id="color-swatches">
+                <button class="swatch active" style="background:#000000" data-color="#000000"></button>
+                <button class="swatch" style="background:#ffffff" data-color="#ffffff"></button>
+                <button class="swatch" style="background:#ef4444" data-color="#ef4444"></button>
+                <button class="swatch" style="background:#f97316" data-color="#f97316"></button>
+                <button class="swatch" style="background:#eab308" data-color="#eab308"></button>
+                <button class="swatch" style="background:#22c55e" data-color="#22c55e"></button>
+                <button class="swatch" style="background:#06b6d4" data-color="#06b6d4"></button>
+                <button class="swatch" style="background:#3b82f6" data-color="#3b82f6"></button>
+                <button class="swatch" style="background:#a855f7" data-color="#a855f7"></button>
+                <button class="swatch" style="background:#ec4899" data-color="#ec4899"></button>
+                <input type="color" id="custom-color-picker" value="#3b82f6" title="自訂顏色">
+              </div>
+
+              <!-- Canvas Action Controls -->
+              <div class="tool-group action-group">
+                <button id="btn-undo" class="tool-btn" title="復原 Undo"><i class="fa-solid fa-rotate-left"></i></button>
+                <button id="btn-clear-canvas" class="tool-btn btn-danger-icon" title="清空畫布"><i class="fa-solid fa-trash-can"></i></button>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT SIDEBAR: Chat & Guessing Box -->
+          <aside class="sidebar-right glass-panel">
+            <div class="panel-header">
+              <h3><i class="fa-solid fa-comments"></i> 猜題聊天室</h3>
+            </div>
+            
+            <div class="chat-messages" id="chat-messages">
+              <div class="chat-msg system-msg">
+                <i class="fa-solid fa-circle-info"></i> 歡迎來到 MQTT 你畫我猜！在下方輸入框猜測畫家所畫的題目吧！
+              </div>
+            </div>
+
+            <form id="chat-form" class="chat-form">
+              <input type="text" id="chat-input" placeholder="輸入猜測答案..." maxlength="30" autocomplete="off">
+              <button type="submit" id="btn-send-chat" class="btn btn-primary">
+                <i class="fa-solid fa-paper-plane"></i>
+              </button>
+            </form>
+          </aside>
+
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Word Selection Modal (Shown to Drawer at round start) -->
+    <div id="modal-word-select" class="modal-overlay hidden">
+      <div class="modal-card glass-panel">
+        <div class="modal-header">
+          <h3><i class="fa-solid fa-lightbulb"></i> 輪到你畫了！請選擇一個題目</h3>
+          <p>你有 15 秒的時間選擇題目：</p>
+        </div>
+        <div class="word-options" id="word-options">
+          <!-- Word buttons generated here -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Game Over Summary Modal -->
+    <div id="modal-game-over" class="modal-overlay hidden">
+      <div class="modal-card glass-panel modal-lg">
+        <div class="modal-header text-center">
+          <i class="fa-solid fa-trophy winner-trophy"></i>
+          <h2>🎉 遊戲結束！頒獎典禮 🎉</h2>
+        </div>
+        
+        <div class="leaderboard-podium" id="podium-container">
+          <!-- Dynamically populated top 3 -->
+        </div>
+
+        <div class="final-scores-list" id="final-scores-list">
+          <!-- Rest of players -->
+        </div>
+
+        <div class="modal-actions">
+          <button id="btn-back-lobby" class="btn btn-primary btn-lg">
+            <i class="fa-solid fa-house"></i> 返回大廳
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Main JavaScript Entry -->
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

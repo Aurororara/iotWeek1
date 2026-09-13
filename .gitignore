@@ -1,0 +1,8 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build & Temp
+dist/
+.DS_Store
+*.log
